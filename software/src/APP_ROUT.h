@@ -1,5 +1,6 @@
 // Rout: latched 1-to-4 gate router for Phazerville / Ornament & Crime
 // Target: Phazerville PSv1.14, Teensy 3.2
+// Build trigger after enabling GitHub Actions
 //
 // TR1 : gate input
 // CV1 : 0..5V route CV
