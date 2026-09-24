@@ -31,8 +31,6 @@
 #include "HSApplication.h"
 #include "util/util_settings.h"
 
-namespace {
-
 static constexpr int ROUT_CV_MAX = 5 * ONE_OCTAVE;
 static constexpr int ROUT_HYSTERESIS = 77;
 static constexpr uint8_t ROUT_QUEUE_SIZE = 64;
@@ -55,8 +53,6 @@ struct RoutEdge {
     uint32_t due;
     bool high;
 };
-
-} // namespace
 
 class RoutApp : public HSApplication,
                 public settings::SettingsBase<RoutApp, ROUT_SETTING_LAST> {
@@ -136,11 +132,7 @@ public:
 
         if (right_param_ == ROUT_PARAM_DELAY) {
             const int delta = direction > 0 ? 1 : -1;
-            if (change_value(ROUT_DELAY_HALF_MS, delta)) {
-                ResetPipeline();
-                prev_input_gate_ = ReadGate();
-                active_delay_ticks_ = DelayTicks();
-            }
+            change_value(ROUT_DELAY_HALF_MS, delta);
         } else {
             int r = Rotation();
             r += direction > 0 ? 1 : -1;
