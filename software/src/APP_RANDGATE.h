@@ -43,6 +43,7 @@ struct RGPersist {
     uint8_t linked;
     uint8_t retrigger;
     uint8_t frozen[RG_CHANNELS];
+    uint8_t active_density[RG_CHANNELS]; // density at pattern generation
     RGParams edited[RG_CHANNELS];
     RGParams active[RG_CHANNELS]; // frozen generation snapshot
 };
@@ -90,7 +91,7 @@ public:
             p.chance[3] = 60;
             p.min_percent = 20;
             p.max_percent = 80;
-            Generate(ch, p);
+            Generate(ch, p, saved_.density);
         }
         ResetTransport();
     }
@@ -226,7 +227,9 @@ public:
             Sanitize(saved_.edited[ch]);
             Sanitize(saved_.active[ch]);
             saved_.frozen[ch] &= 1;
-            Generate(ch, saved_.frozen[ch] ? saved_.active[ch] : saved_.edited[ch]);
+            saved_.active_density[ch] = Clamp(saved_.active_density[ch], 0, 200);
+            Generate(ch, saved_.frozen[ch] ? saved_.active[ch] : saved_.edited[ch],
+                     saved_.frozen[ch] ? saved_.active_density[ch] : saved_.density);
         }
         ResetTransport();
         return sizeof(s);
@@ -245,10 +248,11 @@ private:
         p.max_percent = Clamp(p.max_percent, p.min_percent, 200);
     }
 
-    void Generate(uint8_t channel, const RGParams &config) {
+    void Generate(uint8_t channel, const RGParams &config, uint8_t density) {
         RGParams p = config;
         Sanitize(p);
         saved_.active[channel] = p;
+        saved_.active_density[channel] = density;
         uint32_t random_state = 0x9e3779b9UL ^ (static_cast<uint32_t>(p.seed) * 747796405UL);
         for (uint8_t slot = 0; slot < RG_SLOTS; ++slot) {
             RGEvent &e = pattern_[channel][slot];
@@ -260,7 +264,7 @@ private:
             for (uint8_t rate = 1; rate <= 4; ++rate) {
                 const uint8_t spacing = static_cast<uint8_t>(1 << (rate - 1));
                 if ((slot % spacing) != 0) continue;
-                const uint16_t chance = static_cast<uint16_t>(p.chance[rate - 1]) * saved_.density / 100;
+                const uint16_t chance = static_cast<uint16_t>(p.chance[rate - 1]) * density / 100;
                 const uint8_t effective = (chance > 100) ? 100 : chance;
                 if ((NextRandom(random_state) % 100) < effective)
                     e.rate = rate;
@@ -277,7 +281,7 @@ private:
         // Every reroll gets a new, user-visible, reproducible seed.
         p.seed = static_cast<uint16_t>(p.seed * 25173u + 13849u);
         if (p.seed == 0) ++p.seed;
-        Generate(ch, p);
+        Generate(ch, p, saved_.density);
         wrap_[ch] = false;
     }
     void RerollAll() {
