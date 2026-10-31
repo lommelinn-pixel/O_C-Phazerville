@@ -48,6 +48,7 @@ namespace menu = OC::menu;
 #include "APP_CALIBR8OR.h"
 #include "APP_SCENES.h"
 #include "APP_ROUT.h"
+#include "APP_RANDGATE.h"
 #include "APP_ASR.h"
 #include "APP_H1200.h"
 #include "APP_AUTOMATONNETZ.h"
@@ -103,6 +104,9 @@ static constexpr OC::App available_apps[] = {
   #endif
   #ifdef ENABLE_APP_ROUT
   DECLARE_APP('R','T', "Rout", Rout),
+  #endif
+  #ifdef ENABLE_APP_RANDGATE
+  DECLARE_APP('R','G', "RandGate", RandGate),
   #endif
 
   #ifdef ENABLE_APP_ASR
