@@ -77,7 +77,11 @@ enum HEMISPHERE_SETTINGS {
     HEMISPHERE_SETTINGS_COUNT
 };
 
-#if defined(MOAR_PRESETS)
+#if defined(RANDGATE_V2_T32)
+// The dedicated RandGate 8-slot bank requires EEPROM space on Teensy 3.2.
+// Keep Hemispheres functional with two (instead of four) saved configurations.
+static constexpr int HEM_NR_OF_PRESETS = 2;
+#elif defined(MOAR_PRESETS)
 static constexpr int HEM_NR_OF_PRESETS = 8;
 #else
 static constexpr int HEM_NR_OF_PRESETS = 4;
