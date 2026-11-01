@@ -10,15 +10,17 @@
 #include "OC_apps.h"
 #include "OC_core.h"
 #include "OC_config.h"
+#include "OC_ADC.h"
 #include "OC_digital_inputs.h"
 #include "OC_ui.h"
 #include "HSApplication.h"
 
 namespace {
 static constexpr uint8_t RG_CHANNELS = 4;
+static constexpr uint8_t RG_PRESET_COUNT = 8;
 static constexpr uint8_t RG_SLOTS = 64; // 32 x 1/16 notes, 1/32 resolution
 static constexpr uint16_t RG_MAGIC = 0x5247;
-static constexpr uint8_t RG_VERSION = 1;
+static constexpr uint8_t RG_VERSION = 2;
 
 // The selected duration is a percentage of the generated rhythmic interval.
 // rate: 1=1/32, 2=1/16, 3=1/8, 4=1/4.
@@ -35,6 +37,16 @@ struct RGParams {
     uint8_t max_percent;
 };
 
+// Compact preset: a seed and generator snapshot exactly reproduce the audible gates.
+// Staged (unapplied) edits are intentionally not part of a performance preset.
+struct RGPreset {
+    RGParams pattern[RG_CHANNELS];
+    uint8_t pattern_density[RG_CHANNELS];
+    uint8_t gate_scale[RG_CHANNELS];
+    uint8_t global_density;
+    uint8_t flags; // frozen mask bits 0..3; linked 4; retrigger 5; clock mode 6
+};
+
 struct RGPersist {
     uint16_t magic;
     uint8_t version;
@@ -44,17 +56,26 @@ struct RGPersist {
     uint8_t retrigger;
     uint8_t frozen[RG_CHANNELS];
     uint8_t active_density[RG_CHANNELS]; // density at pattern generation
+    uint8_t gate_scale[RG_CHANNELS]; // 0..200% manual gate length scaler
+    uint8_t preset_valid_mask;
+    uint8_t selected_preset;
+    uint8_t preset_quantized; // 0=immediate, 1=next bar
+    RGPreset presets[RG_PRESET_COUNT];
     RGParams edited[RG_CHANNELS];
     RGParams active[RG_CHANNELS]; // frozen generation snapshot
 };
 
 enum RGChannelParam {
     RG_LENGTH, RG_SEED, RG_P32, RG_P16, RG_P8, RG_P4,
-    RG_MIN, RG_MAX, RG_FREEZE, RG_REROLL, RG_CH_PARAM_COUNT
+    RG_MIN, RG_MAX, RG_GATE_SCALE, RG_FREEZE, RG_REROLL, RG_CH_PARAM_COUNT
 };
 enum RGGlobalParam {
     RG_DENSITY, RG_LINK, RG_CLOCKMODE, RG_RETRIG, RG_ALL_FREEZE,
     RG_ALL_REROLL, RG_GLOBAL_PARAM_COUNT
+};
+enum RGPresetParam {
+    RG_PRESET_SLOT, RG_PRESET_LOAD, RG_PRESET_SAVE,
+    RG_PRESET_QUANTIZE, RG_PRESET_PARAM_COUNT
 };
 
 static uint32_t NextRandom(uint32_t &state) {
@@ -66,7 +87,7 @@ static uint32_t NextRandom(uint32_t &state) {
 static bool Due(uint32_t now, uint32_t at) {
     return static_cast<int32_t>(now - at) >= 0;
 }
-static uint8_t Clamp(uint8_t value, int low, int high) {
+static uint8_t Clamp(int value, int low, int high) {
     return static_cast<uint8_t>(constrain(static_cast<int>(value), low, high));
 }
 } // namespace
@@ -81,8 +102,11 @@ public:
         saved_.clock_mode = 0;
         saved_.linked = 0;
         saved_.retrigger = 0;
+        saved_.preset_quantized = 1;
+        saved_.selected_preset = 0;
         for (uint8_t ch = 0; ch < RG_CHANNELS; ++ch) {
             RGParams &p = saved_.edited[ch];
+            saved_.gate_scale[ch] = 100;
             p.seed = 1001 + ch * 997;
             p.length = 16;
             p.chance[0] = 15;
@@ -223,10 +247,13 @@ public:
         saved_.clock_mode &= 1;
         saved_.linked &= 1;
         saved_.retrigger &= 1;
+        saved_.selected_preset = Clamp(saved_.selected_preset, 0, RG_PRESET_COUNT - 1);
+        saved_.preset_quantized &= 1;
         for (uint8_t ch = 0; ch < RG_CHANNELS; ++ch) {
             Sanitize(saved_.edited[ch]);
             Sanitize(saved_.active[ch]);
             saved_.frozen[ch] &= 1;
+            saved_.gate_scale[ch] = Clamp(saved_.gate_scale[ch], 0, 200);
             saved_.active_density[ch] = Clamp(saved_.active_density[ch], 0, 200);
             Generate(ch, saved_.frozen[ch] ? saved_.active[ch] : saved_.edited[ch],
                      saved_.frozen[ch] ? saved_.active_density[ch] : saved_.density);
