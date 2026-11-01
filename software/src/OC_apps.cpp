@@ -292,6 +292,8 @@ static constexpr size_t total_storage_size() {
 }
 
 static constexpr size_t totalsize = total_storage_size();
+template <size_t N> struct EEPROM_REQUIREMENT_DEBUG;
+EEPROM_REQUIREMENT_DEBUG<totalsize> show_total_eeprom_usage;
 static_assert(totalsize < OC::AppData::kAppDataSize, "EEPROM Allocation Exceeded");
 
 FLASHMEM
