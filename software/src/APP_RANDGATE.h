@@ -347,13 +347,56 @@ private:
             saved_.frozen[ch] = new_state;
     }
 
-    void ResetTransport() {
-        previous_clock_ = false;
-        previous_reset_ = false;
-        bar_clock_count_ = 0;
-        have_clock_ = false;
+    void SavePreset(uint8_t slot) {
+        if (slot >= RG_PRESET_COUNT) return;
+        RGPreset &p = saved_.presets[slot];
+        p.global_density = saved_.density;
+        p.flags = (saved_.linked ? 0x10 : 0) |
+                  (saved_.retrigger ? 0x20 : 0) |
+                  (saved_.clock_mode ? 0x40 : 0);
+        for (uint8_t ch = 0; ch < RG_CHANNELS; ++ch) {
+            p.pattern[ch] = saved_.active[ch];
+            p.pattern_density[ch] = saved_.active_density[ch];
+            p.gate_scale[ch] = saved_.gate_scale[ch];
+            if (saved_.frozen[ch]) p.flags |= (1u << ch);
+        }
+        saved_.preset_valid_mask |= (1u << slot);
+        // Store all application data through the normal O_C global save menu.
+        // Avoid blocking real-time gate scheduling with an EEPROM write here.
+    }
+
+    void RequestLoad(uint8_t slot) {
+        if (slot >= RG_PRESET_COUNT ||
+            !(saved_.preset_valid_mask & (1u << slot))) return;
+        if (saved_.preset_quantized && have_clock_) {
+            pending_preset_ = static_cast<int8_t>(slot);
+        } else {
+            LoadPreset(slot);
+        }
+    }
+
+    void LoadPreset(uint8_t slot) {
+        if (slot >= RG_PRESET_COUNT ||
+            !(saved_.preset_valid_mask & (1u << slot))) return;
+        const RGPreset p = saved_.presets[slot];
+        saved_.density = Clamp(p.global_density, 0, 200);
+        saved_.linked = (p.flags & 0x10) != 0;
+        saved_.retrigger = (p.flags & 0x20) != 0;
+        saved_.clock_mode = (p.flags & 0x40) != 0;
+        for (uint8_t ch = 0; ch < RG_CHANNELS; ++ch) {
+            saved_.edited[ch] = p.pattern[ch];
+            saved_.frozen[ch] = (p.flags >> ch) & 1u;
+            saved_.gate_scale[ch] = Clamp(p.gate_scale[ch], 0, 200);
+            Generate(ch, p.pattern[ch], Clamp(p.pattern_density[ch], 0, 200));
+        }
+        saved_.selected_preset = slot;
+        pending_preset_ = -1;
         midpoint_pending_ = false;
-        clock_period_ = OC_CORE_ISR_FREQ / 8; // 120 BPM (1/16 clock default)
+        ResetPatternPhases();
+        bar_clock_count_ = 0;
+    }
+
+    void ResetPatternPhases() {
         for (uint8_t ch = 0; ch < RG_CHANNELS; ++ch) {
             phase_[ch] = 0;
             previous_step_[ch] = 0;
@@ -363,6 +406,16 @@ private:
             start_at_[ch] = 0;
             base_duration_[ch] = 0;
         }
+    }
+
+    void ResetTransport() {
+        previous_clock_ = false;
+        previous_reset_ = false;
+        bar_clock_count_ = 0;
+        have_clock_ = false;
+        midpoint_pending_ = false;
+        clock_period_ = OC_CORE_ISR_FREQ / 8; // 120 BPM (1/16 clock default)
+        ResetPatternPhases();
     }
 
     void OnClock(uint32_t now) {
