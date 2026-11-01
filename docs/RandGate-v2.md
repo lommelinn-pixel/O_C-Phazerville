@@ -40,7 +40,7 @@ Each snapshot preserves the **currently audible** pattern on each channel (inclu
 
 The v2 application storage layout is different from v1. Old RandGate v1 app data is not automatically migrated. Record existing v1 settings/patterns and keep the v1 firmware .hex before flashing.
 
-Other system settings and Rout are intentionally preserved in the source; consult release notes for any changes needed to fit the 8-slot bank in the Teensy 3.2 EEPROM allocation.
+**Teensy 3.2 EEPROM trade-off:** The v2 firmware keeps full-screen **Rout** and **Hemispheres**, but excludes the standalone **Scenery** and **Piqued** applications and reduces Hemispheres' on-device preset slots from four to two. Their source remains in the repository, and the separate v1 firmware is unchanged. Existing Hemisphere/app settings may not restore across this firmware change because application data chunk sizes differ. Back up presets, calibration data and working v1 firmware before flashing. This reduction is required to fit eight persistent RandGate snapshots in the 2 KB internal EEPROM; it is not an audio/CPU limitation.
 
 ## Testing
 
