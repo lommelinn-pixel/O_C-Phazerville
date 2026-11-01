@@ -130,6 +130,7 @@ public:
         ResetTransport();
         for (uint8_t ch = 0; ch < RG_CHANNELS; ++ch)
             GateOut(ch, false);
+        pending_preset_ = -1;
     }
 
     void Controller() override {
@@ -150,10 +151,12 @@ public:
         }
 
         for (uint8_t ch = 0; ch < RG_CHANNELS; ++ch) {
-            if (high_[ch] && Due(now, off_at_[ch]))
+            // Live knob/CV manipulation also applies to gates already high.
+            if (high_[ch] && Due(now, start_at_[ch] + ScaledDuration(ch)))
                 high_[ch] = false;
             if (pending_retrigger_[ch] && Due(now, retrigger_at_[ch])) {
                 pending_retrigger_[ch] = false;
+                start_at_[ch] = retrigger_at_[ch];
                 high_[ch] = true;
             }
             GateOut(ch, high_[ch]);
@@ -329,6 +332,7 @@ private:
     void ResetTransport() {
         previous_clock_ = false;
         previous_reset_ = false;
+        bar_clock_count_ = 0;
         have_clock_ = false;
         midpoint_pending_ = false;
         clock_period_ = OC_CORE_ISR_FREQ / 8; // 120 BPM (1/16 clock default)
@@ -338,7 +342,8 @@ private:
             wrap_[ch] = false;
             high_[ch] = false;
             pending_retrigger_[ch] = false;
-            off_at_[ch] = 0;
+            start_at_[ch] = 0;
+            base_duration_[ch] = 0;
         }
     }
 
@@ -351,6 +356,11 @@ private:
         have_clock_ = true;
         last_clock_ = now;
         midpoint_pending_ = false;
+        const uint8_t ticks_per_bar = saved_.clock_mode ? 32 : 16;
+        if (pending_preset_ >= 0 && (bar_clock_count_ % ticks_per_bar == 0)) {
+            LoadPreset(static_cast<uint8_t>(pending_preset_));
+        }
+        ++bar_clock_count_;
 
         for (uint8_t ch = 0; ch < RG_CHANNELS; ++ch) {
             if (wrap_[ch]) {
@@ -381,6 +391,17 @@ private:
         }
     }
 
+    uint32_t ScaledDuration(uint8_t ch) const {
+        // Physical CV1..CV4. Bipolar ±5 V -> ∓100 percentage points.
+        // 0V is neutral, so unplugged CV leaves manual GATE SCALE unchanged.
+        const ADC_CHANNEL adc_ch = (ch == 0) ? ADC_CHANNEL_1 :
+            (ch == 1) ? ADC_CHANNEL_2 : (ch == 2) ? ADC_CHANNEL_3 : ADC_CHANNEL_4;
+        const int cv = OC::ADC::pitch_value(adc_ch);
+        const int cv_delta = constrain(cv * 100 / (5 * ONE_OCTAVE), -100, 100);
+        const int scale = constrain(static_cast<int>(saved_.gate_scale[ch]) + cv_delta, 0, 200);
+        return static_cast<uint32_t>((static_cast<uint64_t>(base_duration_[ch]) * scale) / 100u);
+    }
+
     void Fire(uint8_t ch, uint8_t slot, uint32_t now) {
         if (slot >= RG_SLOTS) return;
         const RGEvent &e = pattern_[ch][slot];
@@ -393,7 +414,8 @@ private:
         const uint32_t duration = static_cast<uint32_t>(scaled / 100u);
         if (!duration) return;
 
-        off_at_[ch] = now + duration;
+        base_duration_[ch] = duration;
+        start_at_[ch] = now;
         if (high_[ch] && saved_.retrigger) {
             // Produce a real low interval before the next gate (approx. 1ms).
             high_[ch] = false;
@@ -502,7 +524,8 @@ private:
 
     RGPersist saved_{};
     RGEvent pattern_[RG_CHANNELS][RG_SLOTS]{};
-    uint32_t off_at_[RG_CHANNELS]{};
+    uint32_t start_at_[RG_CHANNELS]{};
+    uint32_t base_duration_[RG_CHANNELS]{};
     uint32_t retrigger_at_[RG_CHANNELS]{};
     uint32_t last_clock_ = 0;
     uint32_t midpoint_due_ = 0;
@@ -512,6 +535,8 @@ private:
     bool wrap_[RG_CHANNELS]{};
     bool have_clock_ = false;
     bool midpoint_pending_ = false;
+    int8_t pending_preset_ = -1;
+    uint8_t bar_clock_count_ = 0;
     bool previous_clock_ = false;
     bool previous_reset_ = false;
     uint8_t phase_[RG_CHANNELS]{};
