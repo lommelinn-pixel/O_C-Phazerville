@@ -168,6 +168,7 @@ public:
         gfxPrint(2, 13, "CH");
         gfxPos(22, 13);
         if (selected_ == RG_CHANNELS) graphics.printf("ALL");
+        else if (selected_ == RG_CHANNELS + 1) graphics.printf("PR");
         else graphics.printf("%c", 'A' + selected_);
 
         gfxPrint(54, 13, "CLK");
@@ -176,13 +177,15 @@ public:
         gfxPrint(102, 13, saved_.linked ? "LNK" : "IND");
 
         const bool global = selected_ == RG_CHANNELS;
-        const uint8_t max_param = global ? RG_GLOBAL_PARAM_COUNT : RG_CH_PARAM_COUNT;
+        const bool preset = selected_ == RG_CHANNELS + 1;
+        const uint8_t max_param = preset ? RG_PRESET_PARAM_COUNT :
+            (global ? RG_GLOBAL_PARAM_COUNT : RG_CH_PARAM_COUNT);
         if (param_ >= max_param) param_ = 0;
 
-        gfxPrint(2, 26, global ? GlobalName(param_) : ChannelName(param_));
+        gfxPrint(2, 26, preset ? PresetName(param_) : (global ? GlobalName(param_) : ChannelName(param_)));
         if (isEditing && CursorBlink()) gfxFrame(0, 23, 126, 15);
         gfxPos(74, 26);
-        PrintValue(global);
+        PrintValue(global, preset);
 
         gfxPrint(2, 41, "A  B  C  D");
         for (uint8_t ch = 0; ch < RG_CHANNELS; ++ch) {
@@ -194,12 +197,13 @@ public:
         gfxPos(83, 43);
         graphics.printf("D%3d", saved_.density);
         gfxPos(83, 55);
-        graphics.printf("%s", all_frozen() ? "LOCK" : "PLAY");
+        if (preset) graphics.printf("S%02d", saved_.selected_preset + 1);
+        else graphics.printf("%s", all_frozen() ? "LOCK" : "PLAY");
     }
 
     void OnLeftEncoderMove(int delta) {
         if (!delta) return;
-        selected_ = static_cast<uint8_t>((static_cast<int>(selected_) + (delta > 0 ? 1 : 4)) % 5);
+        selected_ = static_cast<uint8_t>((static_cast<int>(selected_) + (delta > 0 ? 1 : 5)) % 6);
         param_ = 0;
         CancelEdit();
         ResetCursor();
@@ -207,11 +211,18 @@ public:
 
     void OnLeftButtonPress() {
         if (selected_ == RG_CHANNELS) ToggleAllFreeze();
-        else saved_.frozen[selected_] ^= 1;
+        else if (selected_ < RG_CHANNELS) saved_.frozen[selected_] ^= 1;
+        else { param_ = RG_PRESET_SLOT; CancelEdit(); }
         ResetCursor();
     }
 
     void OnRightButtonPress() {
+        if (selected_ == RG_CHANNELS + 1) {
+            if (param_ == RG_PRESET_LOAD) { RequestLoad(saved_.selected_preset); return; }
+            if (param_ == RG_PRESET_SAVE) { SavePreset(saved_.selected_preset); return; }
+            CursorToggle();
+            return;
+        }
         if (selected_ == RG_CHANNELS) {
             if (param_ == RG_ALL_FREEZE) { ToggleAllFreeze(); return; }
             if (param_ == RG_ALL_REROLL) { RerollAll(); return; }
@@ -224,9 +235,16 @@ public:
 
     void OnRightEncoderMove(int delta) {
         if (!delta) return;
-        const uint8_t count = (selected_ == RG_CHANNELS) ? RG_GLOBAL_PARAM_COUNT : RG_CH_PARAM_COUNT;
+        const uint8_t count = (selected_ == RG_CHANNELS + 1) ? RG_PRESET_PARAM_COUNT :
+            (selected_ == RG_CHANNELS ? RG_GLOBAL_PARAM_COUNT : RG_CH_PARAM_COUNT);
         if (!isEditing) {
             param_ = static_cast<uint8_t>((static_cast<int>(param_) + (delta > 0 ? 1 : count - 1)) % count);
+        } else if (selected_ == RG_CHANNELS + 1) {
+            if (param_ == RG_PRESET_SLOT)
+                saved_.selected_preset = Clamp(static_cast<int>(saved_.selected_preset) +
+                    (delta > 0 ? 1 : -1), 0, RG_PRESET_COUNT - 1);
+            else if (param_ == RG_PRESET_QUANTIZE)
+                saved_.preset_quantized ^= 1;
         } else if (selected_ == RG_CHANNELS) {
             EditGlobal(delta > 0 ? 1 : -1);
         } else {
@@ -463,6 +481,10 @@ private:
             p.max_percent = Clamp(p.max_percent + delta, p.min_percent, 200);
             linked_param = 1;
             break;
+        case RG_GATE_SCALE:
+            saved_.gate_scale[ch] = Clamp(saved_.gate_scale[ch] + delta, 0, 200);
+            linked_param = 1;
+            break;
         default: break;
         }
         if (saved_.linked && linked_param)
@@ -479,6 +501,8 @@ private:
                     dest.max_percent = p.max_percent;
                     if (dest.min_percent > dest.max_percent) dest.min_percent = dest.max_percent;
                 }
+                if (param_ == RG_GATE_SCALE)
+                    saved_.gate_scale[other] = saved_.gate_scale[ch];
             }
         // Changes take effect at each unlocked channel's next pattern boundary.
         // Frozen patterns deliberately retain their generated event table.
@@ -487,7 +511,7 @@ private:
     static const char *ChannelName(uint8_t p) {
         static const char * const names[] = {
             "LENGTH", "SEED", "P 1/32", "P 1/16", "P 1/8", "P 1/4",
-            "MIN %", "MAX %", "FREEZE", "REROLL"
+            "MIN %", "MAX %", "GATE x", "FREEZE", "REROLL"
         };
         return names[p];
     }
@@ -497,7 +521,25 @@ private:
         };
         return names[p];
     }
-    void PrintValue(bool global) {
+    static const char *PresetName(uint8_t p) {
+        static const char * const names[] = { "SLOT", "LOAD", "SAVE", "RECALL AT" };
+        return names[p];
+    }
+    void PrintValue(bool global, bool preset) {
+        if (preset) {
+            switch (param_) {
+            case RG_PRESET_SLOT:
+                graphics.printf("%d %s", saved_.selected_preset + 1,
+                    (saved_.preset_valid_mask & (1u << saved_.selected_preset)) ? "USED" : "EMPTY");
+                break;
+            case RG_PRESET_LOAD:
+                graphics.printf("%s", pending_preset_ >= 0 ? "QUEUED" : "PRESS");
+                break;
+            case RG_PRESET_SAVE: graphics.printf("PRESS"); break;
+            default: graphics.printf("%s", saved_.preset_quantized ? "BAR" : "NOW"); break;
+            }
+            return;
+        }
         if (global) {
             switch (param_) {
             case RG_DENSITY: graphics.printf("%d%%", saved_.density); break;
@@ -516,6 +558,7 @@ private:
                 graphics.printf("%d%%", p.chance[param_ - RG_P32]); break;
             case RG_MIN: graphics.printf("%d%%", p.min_percent); break;
             case RG_MAX: graphics.printf("%d%%", p.max_percent); break;
+            case RG_GATE_SCALE: graphics.printf("%d%%", saved_.gate_scale[selected_]); break;
             case RG_FREEZE: graphics.printf("%s", saved_.frozen[selected_] ? "LOCK" : "LIVE"); break;
             default: graphics.printf("PRESS"); break;
             }
